@@ -22,7 +22,8 @@ headers-y := \
     compat/version.h \
     compat/xen.h \
     compat/xencomm.h \
-    compat/xenoprof.h
+    compat/xenoprof.h \
+    compat/v4v.h
 headers-$(CONFIG_X86)     += compat/arch-x86/xen-mca.h
 headers-$(CONFIG_X86)     += compat/arch-x86/xen.h
 headers-$(CONFIG_X86)     += compat/arch-x86/xen-$(compat-arch-y).h

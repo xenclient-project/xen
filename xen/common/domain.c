@@ -32,6 +32,7 @@
 #include <xen/grant_table.h>
 #include <xen/xenoprof.h>
 #include <xen/irq.h>
+#include <xen/v4v.h>
 #include <asm/debugger.h>
 #include <asm/p2m.h>
 #include <asm/processor.h>
@@ -199,7 +200,8 @@ struct domain *domain_create(
 {
     struct domain *d, **pd;
     enum { INIT_xsm = 1u<<0, INIT_watchdog = 1u<<1, INIT_rangeset = 1u<<2,
-           INIT_evtchn = 1u<<3, INIT_gnttab = 1u<<4, INIT_arch = 1u<<5 };
+           INIT_evtchn = 1u<<3, INIT_gnttab = 1u<<4, INIT_arch = 1u<<5,
+           INIT_v4v = 1u<<6 };
     int err, init_status = 0;
     int poolid = CPUPOOLID_NONE;
 
@@ -312,6 +314,16 @@ struct domain *domain_create(
         spin_unlock(&domlist_update_lock);
     }
 
+    if ( v4v_get_opt_v4v() )
+    {
+        if ( !is_idle_domain(d) )
+        {
+            if ( (err = v4v_init(d)) != 0 )
+                goto fail;
+            init_status |= INIT_v4v;
+        }
+    }
+
     return d;
 
  fail:
@@ -320,6 +332,8 @@ struct domain *domain_create(
     xfree(d->mem_event);
     if ( init_status & INIT_arch )
         arch_domain_destroy(d);
+    if ( init_status & INIT_v4v )
+        v4v_destroy(d);
     if ( init_status & INIT_gnttab )
         grant_table_destroy(d);
     if ( init_status & INIT_evtchn )
@@ -527,6 +541,7 @@ int domain_kill(struct domain *d)
         domain_pause(d);
         d->is_dying = DOMDYING_dying;
         spin_barrier(&d->domain_lock);
+        v4v_destroy(d);
         evtchn_destroy(d);
         gnttab_release_mappings(d);
         tmem_destroy(d->tmem);

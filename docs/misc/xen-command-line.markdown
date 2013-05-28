@@ -895,6 +895,14 @@ entry; see [EFI configuration file description](efi.html)).
 ### unrestricted\_guest
 > `= <boolean>`
 
+### v4v
+> `= <boolean>`
+
+> Default: `false`
+
+Enable or disable the Xen V4V interdomain communications facilities in
+the hypervisor. When disabled, no V4V resources will be allocated.
+
 ### vcpu\_migration\_delay
 > `= <integer>`
 

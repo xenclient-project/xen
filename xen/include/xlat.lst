@@ -97,3 +97,14 @@
 !	vcpu_set_singleshot_timer	vcpu.h
 ?	xenoprof_init			xenoprof.h
 ?	xenoprof_passive		xenoprof.h
+?	v4v_iov				v4v.h
+?	v4v_addr			v4v.h
+?	v4v_ring_id			v4v.h
+?	v4v_send_addr			v4v.h
+?	v4v_ring			v4v.h
+?	v4v_ring_data_ent		v4v.h
+?	v4v_ring_data			v4v.h
+?	v4v_info			v4v.h
+?	v4v_config			v4v.h
+?	v4vtables_rule			v4v.h
+?	v4vtables_list			v4v.h

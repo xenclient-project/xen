@@ -377,6 +377,9 @@ struct domain
     nodemask_t node_affinity;
     unsigned int last_alloc_node;
     spinlock_t node_affinity_lock;
+
+    /* v4v */
+    struct v4v_domain *v4v;
 };
 
 struct domain_setup_info

@@ -47,6 +47,7 @@ obj-y += tmem_xen.o
 obj-y += radix-tree.o
 obj-y += rbtree.o
 obj-y += lzo.o
+obj-y += v4v.o
 
 obj-bin-$(CONFIG_X86) += $(foreach n,decompress bunzip2 unxz unlzma unlzo,$(n).init.o)
 

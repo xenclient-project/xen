@@ -160,35 +160,54 @@ static int get_free_port(struct domain *d)
 
 static long evtchn_alloc_unbound(evtchn_alloc_unbound_t *alloc)
 {
-    struct evtchn *chn;
     struct domain *d;
-    int            port;
-    domid_t        dom = alloc->dom;
     long           rc;
 
-    d = rcu_lock_domain_by_any_id(dom);
+    d = rcu_lock_domain_by_any_id(alloc->dom);
     if ( d == NULL )
         return -ESRCH;
 
+    rc = evtchn_alloc_unbound_domain(d, &alloc->port, alloc->remote_dom, 1);
+    if ( rc )
+        ERROR_EXIT_DOM((int)rc, d);
+
+ out:
+    rcu_unlock_domain(d);
+
+    return rc;
+}
+
+int evtchn_alloc_unbound_domain(struct domain *d, evtchn_port_t *port,
+                                domid_t remote_domid, bool_t call_xsm)
+{
+    struct evtchn *chn;
+    int           rc;
+    int           free_port;
+
     spin_lock(&d->event_lock);
 
-    if ( (port = get_free_port(d)) < 0 )
-        ERROR_EXIT_DOM(port, d);
-    chn = evtchn_from_port(d, port);
-
-    rc = xsm_evtchn_unbound(XSM_TARGET, d, chn, alloc->remote_dom);
-    if ( rc )
+    rc = free_port = get_free_port(d);
+    if ( free_port < 0 )
         goto out;
 
+    chn = evtchn_from_port(d, free_port);
+    if ( call_xsm )
+    {
+        rc = xsm_evtchn_unbound(XSM_TARGET, d, chn, remote_domid);
+        if ( rc )
+            goto out;
+    }
+
     chn->state = ECS_UNBOUND;
-    if ( (chn->u.unbound.remote_domid = alloc->remote_dom) == DOMID_SELF )
+    if ( (chn->u.unbound.remote_domid = remote_domid) == DOMID_SELF )
         chn->u.unbound.remote_domid = current->domain->domain_id;
 
-    alloc->port = port;
+    *port = free_port;
+    /* Everything is fine, returns 0 */
+    rc = 0;
 
  out:
     spin_unlock(&d->event_lock);
-    rcu_unlock_domain(d);
 
     return rc;
 }

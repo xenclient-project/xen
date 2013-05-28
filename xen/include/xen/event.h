@@ -69,6 +69,9 @@ int guest_enabled_event(struct vcpu *v, uint32_t virq);
 /* Notify remote end of a Xen-attached event channel.*/
 void notify_via_xen_event_channel(struct domain *ld, int lport);
 
+int evtchn_alloc_unbound_domain(struct domain *d, evtchn_port_t *port,
+                                domid_t remote_domid, bool_t call_xsm);
+
 /* Internal event channel object accessors */
 #define bucket_from_port(d,p) \
     ((d)->evtchn[(p)/EVTCHNS_PER_BUCKET])

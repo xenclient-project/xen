@@ -133,6 +133,10 @@ typedef struct v4v_info
 #define V4V_DEFAULT_MAX_NOTIFY     0x100 /* Default 256 notify requests */
 #define V4V_DEFAULT_MAX_SEND_SIZE  0x2000000  /* Default 32Mb per send */
 
+#define V4V_RING_TYPE_DATA         0
+#define V4V_RING_TYPE_LISTEN       1
+#define V4V_RING_TYPE_NOTIFICATION 2
+
 typedef struct v4v_config
 {
     uint32_t max_rings;
@@ -267,6 +271,17 @@ typedef struct v4vtables_list
 #define V4VOP_sendv            5
 
 /*
+ * V4VOP_connect
+ * 
+ * lorem ipsum connect description
+ *
+ * do_v4v_op(V4VOP_connect,
+ *           ...)
+ *
+ */
+#define V4VOP_connect          6
+
+/*
  * V4VOP_info
  *
  * Returns v4v info for the current domain (domain that issued the hypercall).
@@ -278,7 +293,7 @@ typedef struct v4vtables_list
  *           XEN_GUEST_HANDLE(v4v_info_t) info,
  *           NULL, 0, 0)
  */
-#define V4VOP_info             6
+#define V4VOP_info             7
 
 /*
  * V4VOP_config
@@ -291,7 +306,7 @@ typedef struct v4vtables_list
  *           XEN_GUEST_HANDLE(v4v_config_t) config,
  *           NULL, 0, 0)
  */
-#define V4VOP_config           7
+#define V4VOP_config           8
 
 /*
  * V4VOP_tables_add
@@ -303,7 +318,7 @@ typedef struct v4vtables_list
  *           NULL,
  *           uint32_t position, 0)
  */
-#define V4VOP_tables_add       8
+#define V4VOP_tables_add       9
 
 /*
  * V4VOP_tables_del
@@ -316,7 +331,7 @@ typedef struct v4vtables_list
  *           NULL,
  *           uint32_t position, 0)
  */
-#define V4VOP_tables_del       9
+#define V4VOP_tables_del       10
 
 /*
  * V4VOP_tables_list
@@ -325,7 +340,7 @@ typedef struct v4vtables_list
  *           XEN_GUEST_HANDLE(v4vtpables_list_t) list,
  *           NULL, 0, 0)
  */
-#define V4VOP_tables_list      10
+#define V4VOP_tables_list      11
 
 #endif /* __XEN_PUBLIC_V4V_H__ */
 

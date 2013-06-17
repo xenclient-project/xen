@@ -57,6 +57,8 @@ struct v4vtables_rule_node
     v4vtables_rule_t rule;
 };
 
+/* FIXME: refactor ring_info into 2 parts, to remove the need for
+   the ring_id and the hash/pending information */
 struct v4v_ring_info
 {
     /* next node in the hash, protected by L2  */
@@ -97,6 +99,8 @@ struct v4v_domain
     /* current ring count for this domain */
     uint32_t ring_count;
     /* protected by L2 */
+    struct v4v_ring_info *ring_notification;
+    struct v4v_ring_info *ring_listen;
     struct hlist_head ring_hash[V4V_HTABLE_SIZE];
 };
 
@@ -1012,14 +1016,15 @@ static void v4v_ring_remove_mfns(struct domain *d, struct v4v_ring_info *ring_in
 }
 
 static void
-v4v_ring_remove_info(struct domain *d, struct v4v_ring_info *ring_info)
+v4v_ring_remove_info(struct domain *d, struct v4v_ring_info *ring_info, int in_hash)
 {
     ASSERT(rw_is_write_locked(&d->v4v->lock));
 
     spin_lock(&ring_info->lock);
 
     v4v_pending_remove_all(ring_info);
-    hlist_del(&ring_info->node);
+    if ( in_hash )
+        hlist_del(&ring_info->node);
     v4v_ring_remove_mfns(d, ring_info);
 
     spin_unlock(&ring_info->lock);
@@ -1029,9 +1034,11 @@ v4v_ring_remove_info(struct domain *d, struct v4v_ring_info *ring_info)
 
 /* Call from guest to unpublish a ring */
 static long
-v4v_ring_remove(struct domain *d, XEN_GUEST_HANDLE_PARAM(v4v_ring_t) ring_hnd)
+v4v_ring_remove(struct domain *d, XEN_GUEST_HANDLE_PARAM(v4v_ring_t) ring_hnd,
+                uint32_t ring_type)
 {
     int ret = 0;
+    int in_hash = 1;
 
     read_lock(&v4v_lock);
 
@@ -1062,12 +1069,25 @@ v4v_ring_remove(struct domain *d, XEN_GUEST_HANDLE_PARAM(v4v_ring_t) ring_hnd)
         }
 
         ring.id.addr.domain = d->domain_id;
-
         write_lock(&d->v4v->lock);
-        ring_info = v4v_ring_find_info(d, &ring.id);
+
+        switch ( ring_type )
+        {
+        case V4V_RING_TYPE_NOTIFICATION:
+            ring_info = d->v4v->ring_notification;
+            d->v4v->ring_notification = NULL;
+            in_hash = 0;
+        case V4V_RING_TYPE_LISTEN:
+            ring_info = d->v4v->ring_listen;
+            d->v4v->ring_listen = NULL;
+            in_hash = 0;
+            break;
+        default:
+            ring_info = v4v_ring_find_info(d, &ring.id);
+        }
 
         if ( ring_info )
-            v4v_ring_remove_info(d, ring_info);
+            v4v_ring_remove_info(d, ring_info, in_hash);
 
         write_unlock(&d->v4v->lock);
 
@@ -1088,7 +1108,8 @@ v4v_ring_remove(struct domain *d, XEN_GUEST_HANDLE_PARAM(v4v_ring_t) ring_hnd)
 /* call from guest to publish a ring */
 static long
 v4v_ring_add(struct domain *d, XEN_GUEST_HANDLE_PARAM(v4v_ring_t) ring_hnd,
-             uint32_t npage, XEN_GUEST_HANDLE_PARAM(v4v_pfn_t) pfn_hnd)
+             uint32_t npage, XEN_GUEST_HANDLE_PARAM(v4v_pfn_t) pfn_hnd,
+             uint32_t ring_type)
 {
     int ret = 0;
 
@@ -1166,21 +1187,41 @@ v4v_ring_add(struct domain *d, XEN_GUEST_HANDLE_PARAM(v4v_ring_t) ring_hnd,
         }
         copy_field_to_guest(ring_hnd, &ring, tx_ptr);
 
-        read_lock(&d->v4v->lock);
-        ring_info = v4v_ring_find_info(d, &ring.id);
-
-        if ( ring_info )
+        /* check if the ring already exists */
+        if ( ring_type == V4V_RING_TYPE_LISTEN )
         {
-            /* Ring info already exists. */
-            read_unlock(&d->v4v->lock);
-            printk(XENLOG_WARNING "v4v: dom%d ring already registered\n",
-                    current->domain->domain_id);
-            ret = -EEXIST;
-            break;
+            if ( d->v4v->ring_listen )
+            {
+                ret = -EEXIST;
+                break;
+            }
         }
+        else if ( ring_type == V4V_RING_TYPE_NOTIFICATION )
+        {
+            if ( d->v4v->ring_notification )
+            {
+                ret = -EEXIST;
+                break;
+            }
+        }
+        else
+        {
+            read_lock(&d->v4v->lock);
 
-        /* Making a new one, lock not needed. */
-        read_unlock(&d->v4v->lock);
+            ring_info = v4v_ring_find_info(d, &ring.id);
+            if ( ring_info )
+            {
+                /* Ring info already exists. */
+                read_unlock(&d->v4v->lock);
+                printk(XENLOG_WARNING "v4v: dom%d ring already registered\n",
+                        current->domain->domain_id);
+                ret = -EEXIST;
+                break;
+            }
+
+            /* Making a new one, lock not needed. */
+            read_unlock(&d->v4v->lock);
+        }
 
         ring_info = xmalloc(struct v4v_ring_info);
         if ( !ring_info )
@@ -1203,12 +1244,23 @@ v4v_ring_add(struct domain *d, XEN_GUEST_HANDLE_PARAM(v4v_ring_t) ring_hnd,
             break;
         }
 
-        hash = v4v_hash_fn(&ring.id);
 
-        write_lock(&d->v4v->lock);
-        hlist_add_head(&ring_info->node, &d->v4v->ring_hash[hash]);
-        d->v4v->ring_count++;
-        write_unlock(&d->v4v->lock);
+        switch ( ring_type )
+        {
+        case V4V_RING_TYPE_LISTEN:
+            d->v4v->ring_listen = ring_info;
+            break;
+        case V4V_RING_TYPE_NOTIFICATION:
+            d->v4v->ring_notification = ring_info;
+            break;
+        default:
+            hash = v4v_hash_fn(&ring.id);
+
+            write_lock(&d->v4v->lock);
+            hlist_add_head(&ring_info->node, &d->v4v->ring_hash[hash]);
+            d->v4v->ring_count++;
+            write_unlock(&d->v4v->lock);
+        }
  
     } while ( 0 );
 
@@ -1768,6 +1820,106 @@ v4v_sendv(struct domain *src_d, v4v_addr_t *src_addr,
     return ret;
 }
 
+static int
+v4v_ring_insert_simple(struct v4v_ring_info *ring_info, unsigned char *data, unsigned int len)
+{
+    v4v_ring_t ring;
+    static XEN_GUEST_HANDLE(uint8_t) empty_hnd = { 0 };
+    int ret;
+
+    if ( (ret = v4v_memcpy_from_guest_ring(&ring, ring_info, 0,
+                                           sizeof(ring))) )
+        return ret;
+
+    ring.tx_ptr = ring_info->tx_ptr;
+    ring.len = ring_info->len;
+
+    ret = v4v_memcpy_to_guest_ring(ring_info,
+                                   ring.tx_ptr + sizeof(v4v_ring_t),
+                                   data, empty_hnd, len);
+    if ( ret )
+        return ret;
+
+    ring.tx_ptr += len;
+    if ( ring.tx_ptr >= ring_info->len )
+        ring.tx_ptr = 0;
+
+    mb();
+    ring_info->tx_ptr = ring.tx_ptr;
+    if ( (ret = v4v_update_tx_ptr(ring_info, ring.tx_ptr)) )
+        return ret;
+    v4v_ring_unmap(ring_info);
+
+    return 0;
+}
+
+static long
+v4v_connect(struct domain *src_d, v4v_send_addr_t *send_addr)
+{
+    int ret = 0;
+    struct domain *dst_d;
+    v4v_addr_t *src_addr = &send_addr->src;
+    v4v_addr_t *dst_addr = &send_addr->dst;
+
+    read_lock(&v4v_lock);
+
+    if ( !src_d->v4v )
+    {
+        read_unlock(&v4v_lock);
+        v4v_dprintk("!src_d->v4v, EINVAL\n");
+        return -EINVAL;
+    }
+
+    src_addr->domain = src_d->domain_id;
+
+    dst_d = get_domain_by_id(dst_addr->domain);
+    if ( !dst_d )
+    {
+        read_unlock(&v4v_lock);
+        v4v_dprintk("!dst_d, EINVAL\n");
+        return -EINVAL;
+    }
+
+    do {
+        struct v4v_ring_info *ring_info;
+
+        if ( !dst_d->v4v )
+        {
+            v4v_dprintk("dst_d->v4v, ECONNREFUSED\n");
+            ret = -ECONNREFUSED;
+            break;
+        }
+
+        read_lock(&dst_d->v4v->lock);
+
+        ring_info = dst_d->v4v->ring_listen;
+        if ( !ring_info )
+        {
+            ret = -ECONNREFUSED;
+            v4v_dprintk("!ring_info, ECONNREFUSED\n");
+        }
+        else
+        {
+            spin_lock(&ring_info->lock);
+            ret = v4v_ring_insert_simple(ring_info, (unsigned char *) send_addr, sizeof(v4v_send_addr_t));
+            spin_unlock(&ring_info->lock);
+
+            if ( ret >= 0 )
+            {
+                v4v_signal_domain(dst_d);
+            }
+
+        }
+        read_unlock(&dst_d->v4v->lock);
+
+    } while ( 0 );
+
+    put_domain(dst_d);
+    read_unlock(&v4v_lock);
+
+    return ret;
+}
+
 static void
 v4v_info(struct domain *d, v4v_info_t *info)
 {
@@ -1812,17 +1964,19 @@ do_v4v_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg1,
          XEN_GUEST_HANDLE_PARAM(v4v_pfn_t) pfn_hnd =
                  guest_handle_cast(arg2, v4v_pfn_t);
          uint32_t npage = arg3;
+         uint32_t ring_type = arg4;
 
          if ( unlikely(!guest_handle_okay(pfn_hnd, npage)) )
              goto out;
-         rc = v4v_ring_add(d, ring_hnd, npage, pfn_hnd);
+         rc = v4v_ring_add(d, ring_hnd, npage, pfn_hnd, ring_type);
          break;
     }
     case V4VOP_unregister_ring:
     {
          XEN_GUEST_HANDLE_PARAM(v4v_ring_t) ring_hnd =
                  guest_handle_cast(arg1, v4v_ring_t);
-         rc = v4v_ring_remove(d, ring_hnd);
+         /* FIXME no cast to uint64_t */
+         rc = v4v_ring_remove(d, ring_hnd, (uint64_t) arg2.p);
          break;
     }
     case V4VOP_sendv:
@@ -1839,6 +1993,18 @@ do_v4v_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg1,
 
         rc = v4v_sendv(d, &addr.src, &addr.dst, message_type,
                 guest_handle_cast(arg2, v4v_iov_t), niov);
+        break;
+    }
+    case V4VOP_connect:
+    {
+        XEN_GUEST_HANDLE_PARAM(v4v_send_addr_t) addr_hnd =
+                guest_handle_cast(arg1, v4v_send_addr_t);
+        v4v_send_addr_t addr;
+
+        if ( copy_from_guest(&addr, addr_hnd, 1) )
+            goto out;
+
+        rc = v4v_connect(d, &addr);
         break;
     }
     case V4VOP_notify:
@@ -1962,9 +2128,13 @@ v4v_destroy(struct domain *d)
                     next, &d->v4v->ring_hash[i],
                     node)
             {
-                v4v_ring_remove_info(d, ring_info);
+                v4v_ring_remove_info(d, ring_info, 1);
             }
         }
+        if ( d->v4v->ring_notification )
+            v4v_ring_remove_info(d, d->v4v->ring_notification, 0);
+        if ( d->v4v->ring_listen )
+            v4v_ring_remove_info(d, d->v4v->ring_listen, 0);
         write_unlock(&d->v4v->lock);
     }
 
@@ -1999,6 +2169,8 @@ v4v_init(struct domain *d)
     v4v->max_notify = V4V_DEFAULT_MAX_NOTIFY;
     v4v->max_send_size = V4V_DEFAULT_MAX_SEND_SIZE;
     v4v->ring_count = 0;
+    v4v->ring_notification = NULL;
+    v4v->ring_listen = NULL;
 
     for ( i = 0; i < V4V_HTABLE_SIZE; ++i )
         INIT_HLIST_HEAD(&v4v->ring_hash[i]);
